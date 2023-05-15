@@ -1,0 +1,187 @@
+Parameters:
+  LambdaFuncName:
+    Type: String
+    Default: Lambda_api-lambda-db
+  APIName:
+    Type: String
+    Default: API_api-lambda-db
+  EnvironmentName:
+    Type: String
+    AllowedValues:
+      - Dev 
+      - Test
+      - Staging
+    Description: 'Select an environment'
+
+EnvironmentMapping:
+  Value:
+    - !If [EnvironmentIsDev, dev, null]
+    - !If [EnvironmentIsProd, prod, null]
+    - !If [EnvironmentIsStaging, staging, null]
+  Description: Mapping the environment parameter to the created resources
+  Condition: EnvironmentIsDev, EnvironmentIsProd, EnvironmentIsStaging
+
+DevResources:
+  Value:
+    - !Ref S3Bucket
+    - !Ref LambdaFunction
+    - !Ref APIGatewayAuthorizer
+    - !Ref APIGatewayRestAPI
+    - !Ref APIGatewayMethod
+    - !Ref APIGatewayDeployment
+    - !Ref APIGatewayPermission
+  Description: The list of resources created in the dev environment
+  Condition: EnvironmentIsDev
+
+ProdResources:
+  Value:
+    - !Ref S3Bucket
+    - !Ref LambdaFunction
+    - !Ref APIGatewayAuthorizer
+    - !Ref APIGatewayRestAPI
+    - !Ref APIGatewayMethod
+    - !Ref APIGatewayDeployment
+    - !Ref APIGatewayPermission
+  Description: The list of resources created in the prod environment
+  Condition: EnvironmentIsProd
+
+StagingResources:
+  Value:
+    - !Ref S3Bucket
+    - !Ref LambdaFunction
+    - !Ref APIGatewayAuthorizer
+    - !Ref APIGatewayRestAPI
+    - !Ref APIGatewayMethod
+    - !Ref APIGatewayDeployment
+    - !Ref APIGatewayPermission
+  Description: The list of resources created in the staging environment
+  Condition: EnvironmentIsStaging
+
+Resources:
+#S3 Bucket
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 's3-bucket-${EnvironmentName}'
+# LAmbdaFunction
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Ref S3Bucket 
+        S3Key: !Sub 'lambda-function-${EnvironmentNa}.zip'   
+      FunctionName:!Sub 'lambda-function-${EnvironmentName}'
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Role: !GetAtt LambdaIAMRole.Arn
+    DependsOn:
+      - LambdaIAMRole
+  LambdaIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+#  MyLambdaAuthorizer:
+  APIGatewayAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub '${AWS::StackName}-APIGatewayAuthorizer'
+      Type: TOKEN
+      RestApiId: !Ref APIGatewayRestAPI
+      IdentitySource: method.request.header.Authorization
+      AuthorizerCredentials: !GetAtt LambdaFunction.Arn
+      AuthorizerResultTtlInSeconds: 300
+      AuthorizerUri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFuncNameArn}/invocations'
+#Create RestApi
+  APIGatewayRestAPI:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name:
+        Ref: APIName
+    DependsOn:
+      - LambdaFunction
+# API RESOURCE
+  APIGatewayResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref APIGatewayRestAPI
+      ParentId: !GetAtt
+        - APIGatewayRestAPI
+        - RootResourceId
+      PathPart:
+        Ref: LambdaFuncName
+    DependsOn:
+      - APIGatewayRestAPI
+# API PUT METHOD
+  APIGatewayMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref APIGatewayRestAPI
+      ResourceId: !Ref APIGatewayResource
+      HttpMethod: PUT
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MyLambdaAuthorizer
+      MethodResponses:
+        - StatusCode: 200
+      Integration:
+        Type: AWS
+        IntegrationResponses:
+          - StatusCode: 200
+        IntegrationHttpMethod: PUT
+        # Uri: !Sub
+        #   - >-
+        #     arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFuncNameArn}/invocations
+        #   - LambdaFuncNameArn: !GetAtt LambdaFunction.Arn
+    DependsOn:
+      - APIGatewayResource
+      - MyLambdaAuthorizer
+#API DELETE METHOD
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      RestApiId: !Ref APIGatewayRestAPI
+      ResourceId: !Ref APIGatewayResource
+      HttpMethod: DELETE
+      AuthorizationType: CUSTOM
+      AuthorizerId: !Ref MyLambdaAuthorizer
+      MethodResponses:
+        - StatusCode: 200
+      Integration:
+        Type: AWS
+        IntegrationResponses:
+          - StatusCode: 200
+        IntegrationHttpMethod: DELETE
+        # Uri: !Sub
+        #   - >-
+        #     arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFuncNameArn}/invocations
+        #   - LambdaFuncNameArn: !GetAtt LambdaFunction.Arn
+    DependsOn:
+      - APIGatewayResource
+      - MyLambdaAuthorizer
+#API DEPLOYMENT
+  APIGatewayDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref APIGatewayRestAPI
+      StageName:
+        Ref: EnvironmentName
+    DependsOn:
+      - APIGatewayMethod
+#API PERMISSION
+  APIGatewayPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+    DependsOn:
+      - APIGatewayDeployment
